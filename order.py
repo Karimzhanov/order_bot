@@ -26,7 +26,9 @@ def create_table():
                         last_payment_date TEXT,
                         remaining_downloads INTEGER DEFAULT 3
                     )''')
- 
+    conn.commit()
+    conn.close()
+
 create_table()
 
 async def start(message: types.Message):
@@ -38,7 +40,7 @@ async def start(message: types.Message):
         keyboard = InlineKeyboardMarkup().add(bonus_button, tariff_button)
         await bot.send_message(chat_id=chat_id, text="Привет! Вы получаете 3 бесплатных скачивания после нажатия кнопки 'Бонусы' или можете ознакомиться с нашими тарифами.", reply_markup=keyboard)
     else:
-        await bot.send_message(chat_id=chat_id, text="Привет! Вы уже являетесь участником группы.")
+        await show_tariffs(chat_id)
 
 async def bonus(message: types.Message):
     chat_id = message.chat.id
@@ -128,17 +130,51 @@ async def handle_button(query: types.CallbackQuery):
     if data == 'help':
         await help_command(query)  
     elif data == 'subscribe_monthly':
-        await process_subscription_payment(chat_id, 'monthly', query)
+        await ask_confirmation(chat_id, 'subscribe_monthly', query.message.message_id)
     elif data == 'subscribe_vip':
-        await process_subscription_payment(chat_id, 'vip', query)
+        await ask_confirmation(chat_id, 'subscribe_vip', query.message.message_id)
     elif data == 'download_5':
-        await process_download_payment(chat_id, 5, query)
+        await ask_confirmation(chat_id, 'download_5', query.message.message_id)
     elif data == 'download_15':
-        await process_download_payment(chat_id, 15, query)
+        await ask_confirmation(chat_id, 'download_15', query.message.message_id)
     elif data == 'bonus':
         await bonus(query.message)
     elif data == 'tariff':  
         await show_tariffs(chat_id)
+    elif data.startswith('confirm_'):
+        await process_confirmation(chat_id, data[len('confirm_'):], query.message.message_id)
+    elif data.startswith('cancel_'):
+        await cancel_confirmation(chat_id, query.message.message_id)
+
+async def ask_confirmation(chat_id, action, message_id):
+    confirmation_keyboard = InlineKeyboardMarkup().row(
+        InlineKeyboardButton        ("Да", callback_data=f"confirm_{action}"),
+        InlineKeyboardButton("Нет", callback_data=f"cancel_{message_id}")
+    )
+    await bot.send_message(chat_id=chat_id, text="Вы уверены, что хотите выбрать этот тариф?", reply_markup=confirmation_keyboard)
+
+async def process_confirmation(chat_id, action, message_id):
+    if action.startswith('subscribe'):
+        await process_subscription_payment(chat_id, action)
+    elif action.startswith('download'):
+        await process_download_payment(chat_id, action)
+    else:
+        await bot.send_message(chat_id=chat_id, text="Действие отменено.")
+
+async def process_subscription_payment(chat_id, subscription_type):
+    try:
+        await bot.send_message(chat_id=chat_id, text=f"Подписка типа '{subscription_type.split('_')[-1]}' успешно активирована! Ссылка на сайт: {tariff_link}")
+    except Exception as e:
+        await bot.send_message(chat_id=chat_id, text="Произошла ошибка при активации подписки. Пожалуйста, попробуйте еще раз или обратитесь в службу поддержки.")
+        logger.error(f"Ошибка в обработке команды /buy: {e}")
+
+async def process_download_payment(chat_id, num_downloads):
+    try:
+        update_remaining_downloads(chat_id, get_remaining_downloads(chat_id) + int(num_downloads.split('_')[-1]))
+        await bot.send_message(chat_id=chat_id, text=f"Куплено {num_downloads.split('_')[-1]} скачиваний! Ссылка на сайт: {tariff_link}")
+    except Exception as e:
+        await bot.send_message(chat_id=chat_id, text="Произошла ошибка при покупке скачиваний. Пожалуйста, попробуйте еще раз или обратитесь в службу поддержки.")
+        logger.error(f"Ошибка при покупке скачиваний: {e}")
 
 async def show_tariffs(chat_id):
     tariffs_message = "Доступные тарифы:\n\n" \
@@ -149,19 +185,18 @@ async def show_tariffs(chat_id):
                       "чтобы приобрести тарифы нажмите на кнопку /buy\n\n" 
     await bot.send_message(chat_id=chat_id, text=tariffs_message)
 
-async def process_subscription_payment(chat_id, subscription_type, query):
-    try:
-        await bot.send_message(chat_id=chat_id, text=f"Подписка типа '{subscription_type}' успешно активирована! Ссылка на сайт: {tariff_link}")
-    except Exception as e:
-        await bot.send_message(chat_id=chat_id, text="Произошла ошибка при активации подписки. Пожалуйста, попробуйте еще раз или обратитесь в службу поддержки.")
-        logger.error(f"Ошибка в обработке команды /buy: {e}")
+async def cancel_confirmation(chat_id, message_id):
+    await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text="Выберите тариф:", reply_markup=create_tariff_keyboard())
 
-async def process_download_payment(chat_id, num_downloads, query):
-    try:
-        update_remaining_downloads(chat_id, get_remaining_downloads(chat_id) + num_downloads)
-        await bot.send_message(chat_id=chat_id, text=f"Куплено {num_downloads} скачиваний! Ссылка на сайт: {tariff_link}")
-    except Exception as e:
-        await bot.send_message(chat_id=chat_id, text="Произошла ошибка при покупке скачиваний. Пожалуйста, попробуйте еще раз или обратитесь в службу поддержки.")
+def create_tariff_keyboard():
+    monthly_button = InlineKeyboardButton("Подписка на месяц - 400 сом", callback_data="subscribe_monthly")
+    vip_button = InlineKeyboardButton("VIP подписка - 1000 сом", callback_data="subscribe_vip")
+    five_downloads_button = InlineKeyboardButton("5 скачиваний - 100 сом", callback_data="download_5")
+    fifteen_downloads_button = InlineKeyboardButton("15 скачиваний - 250 сом", callback_data="download_15")
+    return InlineKeyboardMarkup().row(monthly_button, vip_button).row(five_downloads_button, fifteen_downloads_button)
+
+async def error_handler(update, exception):
+    logger.error(f"Update {update} caused error: {exception}")
 
 async def main():
     # Регистрируем обработчики
@@ -171,14 +206,15 @@ async def main():
     dp.register_message_handler(handle_text, content_types=types.ContentType.TEXT)
     dp.register_message_handler(handle_material_link, content_types=types.ContentType.TEXT, regexp=r'https?://\S+')
     dp.register_callback_query_handler(handle_button, lambda query: query.data in ['help', 'subscribe_monthly', 'subscribe_vip', 'download_5', 'download_15', 'bonus', 'tariff'])
-    
-    # Получаем список зарегистрированных обработчиков
-    registered_handlers = dp.message_handlers
-    print("Registered handlers:", registered_handlers)
+    dp.register_callback_query_handler(handle_button, lambda query: query.data.startswith('confirm_') or query.data.startswith('cancel_'))
 
+    # Регистрируем обработчик ошибок
+    dp.errors_handler(error_handler)
+    
     # Запускаем бота
     await dp.start_polling()
 
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
+
